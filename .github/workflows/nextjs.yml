@@ -1,0 +1,68 @@
+name: Deploy Next.js to GitHub Pages
+
+on:
+  # 触发条件：当 main 分支有推送时
+  push:
+    branches: ["main"]
+
+  # 允许手动触发工作流
+  workflow_dispatch:
+
+# 设置 GitHub Pages 权限
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一分支只允许一个工作流运行
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # 构建作业
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 检出代码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 设置 Node.js
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+
+      # 安装依赖
+      - name: Install dependencies
+        run: npm ci
+
+      # 构建 Next.js 项目
+      - name: Build Next.js
+        run: npm run build
+
+      # 为 GitHub Pages 添加 .nojekyll 文件
+      # 这样可以正确处理以下划线开头的文件和目录
+      - name: Add .nojekyll file
+        run: touch ./out/.nojekyll
+
+      # 上传构建产物
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+  # 部署作业
+  deploy:
+    # 需要等待构建作业完成
+    needs: build
+
+    # 部署到 GitHub Pages
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

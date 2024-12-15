@@ -92,37 +92,6 @@ export default function PDFFieldViewer() {
         const opList = await page.getOperatorList()
         console.log('Page operator list:', opList)
 
-        // 遍历操作列表查找图片
-        for (let j = 0; j < opList.fnArray.length; j++) {
-          const fn = opList.fnArray[j]
-          const args = opList.argsArray[j]
-          
-          // 检查是否是图片操作
-          if (fn === pdfjsLib.OPS.paintImageXObject) {
-            const imageObj = page.objs.get(args[0])
-            if (imageObj) {
-              console.log('Found image:', {
-                name: args[0],
-                data: imageObj,
-                width: imageObj.width,
-                height: imageObj.height,
-                kind: imageObj.kind
-              })
-
-              // 如果是位图，可以获取图片数据
-              if (imageObj.kind === 'Bitmap') {
-                pageContent.images.push({
-                  name: args[0],
-                  width: imageObj.width,
-                  height: imageObj.height,
-                  data: imageObj.data,  // Uint8ClampedArray 格式的图片数据
-                  kind: imageObj.kind
-                })
-              }
-            }
-          }
-        }
-
         // 获取注释（表单字段等）
         const annotations = await page.getAnnotations()
         pageContent.annotations = annotations.map((annot: any) => {
