@@ -64,14 +64,156 @@ export default function PDFFieldViewer() {
       const file = event.target.files[0]
       
       const arrayBuffer = await file.arrayBuffer()
-      const pdf = await getDocument({ data: arrayBuffer }).promise
+      const pdf = await getDocument({
+        data: arrayBuffer,
+        cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+        cMapPacked: true,
+        standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'
+      }).promise
       setPdfDocument(pdf)
 
-      const page = await pdf.getPage(1)
-      const annotations = await page.getAnnotations()
-      
-      console.log('All annotations:', annotations)
-      
+      // 获取所有页面的内容
+      const pdfContent: any = {
+        pageCount: pdf.numPages,
+        pages: []
+      }
+
+      // 遍历所有页面
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i)
+        const pageContent: any = {
+          pageNumber: i,
+          annotations: [],
+          textContent: null,
+          images: []  // 添加图片数组
+        }
+
+        // 获取页面操作列表
+        const opList = await page.getOperatorList()
+        console.log('Page operator list:', opList)
+
+        // 遍历操作列表查找图片
+        for (let j = 0; j < opList.fnArray.length; j++) {
+          const fn = opList.fnArray[j]
+          const args = opList.argsArray[j]
+          
+          // 检查是否是图片操作
+          if (fn === pdfjsLib.OPS.paintImageXObject) {
+            const imageObj = page.objs.get(args[0])
+            if (imageObj) {
+              console.log('Found image:', {
+                name: args[0],
+                data: imageObj,
+                width: imageObj.width,
+                height: imageObj.height,
+                kind: imageObj.kind
+              })
+
+              // 如果是位图，可以获取图片数据
+              if (imageObj.kind === 'Bitmap') {
+                pageContent.images.push({
+                  name: args[0],
+                  width: imageObj.width,
+                  height: imageObj.height,
+                  data: imageObj.data,  // Uint8ClampedArray 格式的图片数据
+                  kind: imageObj.kind
+                })
+              }
+            }
+          }
+        }
+
+        // 获取注释（表单字段等）
+        const annotations = await page.getAnnotations()
+        pageContent.annotations = annotations.map((annot: any) => {
+          console.log('Annotation details:', {
+            type: annot.subtype,
+            fieldType: annot.fieldType,
+            fieldName: annot.fieldName,
+            fieldValue: annot.fieldValue,
+            buttonValue: annot.buttonValue,
+            checkBox: annot.checkBox,
+            state: annot.state,
+            stateModel: annot.stateModel,
+            // 添加这些新的检查项
+            as: annot.as,
+            mk: annot.mk,
+            appearanceState: annot.appearanceState,
+            appearance: annot.appearance,
+            appearanceStreamContent: annot.appearanceStreamContent,
+            // 尝试获取图像数据
+            normalAppearance: annot.appearance?.normal,
+            checkedAppearance: annot.appearance?.on,
+            uncheckedAppearance: annot.appearance?.off,
+            // AP (Appearance) 字典
+            AP: annot.AP,
+            // 其他可能包含外观信息的属性
+            MK: annot.MK,
+            DA: annot.DA,
+            raw: annot
+          });
+
+          return {
+            type: annot.subtype,
+            fieldType: annot.fieldType,
+            fieldName: annot.fieldName,
+            id: annot.id,
+            rect: annot.rect,
+            value: annot.fieldValue,
+            defaultValue: annot.defaultValue,
+            options: annot.options,
+            ...(annot.fieldType === 'Btn' && {
+              buttonValue: annot.buttonValue,
+              checkBox: annot.checkBox,
+              state: annot.state,
+              stateModel: annot.stateModel,
+              appearanceState: annot.appearanceState,
+              // 检查多个可能的状态标识
+              isChecked: 
+                annot.fieldValue === 'Yes' ||
+                annot.state === 'Yes' ||
+                annot.appearanceState === 'Yes' ||
+                (annot.as && annot.as.name === 'Yes') ||
+                annot.checkBox?.isChecked ||
+                false
+            })
+          }
+        })
+
+        // 获取文本内容
+        const textContent = await page.getTextContent()
+        console.log('Raw text content:', textContent) // 打印原始文本内容
+
+        pageContent.textContent = {
+          // 按项目分类的文本
+          items: textContent.items.map((item: any) => ({
+            text: item.str,
+            x: item.transform[4],
+            y: item.transform[5],
+            fontSize: item.transform[0],
+            fontName: item.fontName,
+            // 添加更多调试信息
+            transform: item.transform,
+            width: item.width,
+            height: item.height,
+            type: item.type
+          })),
+          // 合并所有文本
+          fullText: textContent.items
+            .map((item: any) => item.str)
+            .join(' '),
+          // 添加原始数据用于调试
+          raw: textContent
+        }
+
+        pdfContent.pages.push(pageContent)
+      }
+
+      // 打印完整的PDF内容
+      console.log('PDF Content:', JSON.stringify(pdfContent, null, 2))
+
+      // 继续处理表单字段
+      const annotations = await pdf.getPage(1).then(page => page.getAnnotations())
       const formFields = annotations
         .filter((annot: any) => annot.fieldType)
         .reduce((acc: { [key: string]: FormField }, field: any) => {
@@ -87,6 +229,36 @@ export default function PDFFieldViewer() {
             });
           }
 
+          // 查复选框状态
+          const getCheckboxState = (annot: any) => {
+            // 检查外观状态
+            const hasCheckedAppearance = annot.appearance?.normal?.has('Yes') || 
+                                        annot.AP?.N?.has('Yes');
+            
+            return {
+              isChecked: 
+                annot.fieldValue === 'Yes' ||
+                annot.state === 'Yes' ||
+                annot.appearanceState === 'Yes' ||
+                (annot.as && annot.as.name === 'Yes') ||
+                annot.checkBox?.isChecked ||
+                false,
+              // 保存外观相关信息
+              appearance: {
+                normal: annot.appearance?.normal,
+                checked: annot.appearance?.on || annot.AP?.N?.get('Yes'),
+                unchecked: annot.appearance?.off || annot.AP?.N?.get('Off'),
+                current: annot.appearance?.normal?.get(annot.appearanceState || 'Off')
+              }
+            };
+          };
+
+          const checkboxState = getCheckboxState(field);
+          console.log('Checkbox appearance:', {
+            fieldName: field.fieldName,
+            ...checkboxState
+          });
+
           acc[field.fieldName] = {
             type: field.fieldType,
             value: field.fieldValue || '',
@@ -99,13 +271,24 @@ export default function PDFFieldViewer() {
             }),
             // チェックボックスの状態を取得
             ...(field.fieldType === 'Btn' && {
-              isChecked: field.fieldValue === exportValueDecoded || 
-                        field.fieldValue === 'Yes' || 
-                        field.checkBox?.isChecked || 
-                        false,
-              exportValue: exportValueDecoded  // 保存解码后的值
+              isChecked: checkboxState.isChecked,
+              appearance: checkboxState.appearance
             })
           }
+          
+          // 添加调试日志
+          if (field.fieldType === 'Btn') {
+            console.log('Checkbox field details:', {
+              fieldName: field.fieldName,
+              isChecked: checkboxState.isChecked,
+              fieldValue: field.fieldValue,
+              state: field.state,
+              appearanceState: field.appearanceState,
+              as: field.as,
+              checkBox: field.checkBox
+            });
+          }
+
           return acc
         }, {})
       console.log(formFields)
@@ -117,7 +300,7 @@ export default function PDFFieldViewer() {
 
     } catch (err) {
       console.error('PDFの処理中にエラーが発生しました:', err)
-      setError(`PDFの処理にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`)
+      setError(`PDFの処理中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setIsLoading(false)
     }
@@ -164,7 +347,7 @@ export default function PDFFieldViewer() {
       setIsLoading(true)
       setError(null)
 
-      // フォームデータの更新
+      // フォーデータの更新
       for (const [fieldName, value] of Object.entries(data)) {
         const field = fields[fieldName]
         if (field) {
@@ -211,7 +394,7 @@ export default function PDFFieldViewer() {
       }
 
     } catch (err) {
-      console.error('PDFの保存中にエ��ーが発生しました:', err)
+      console.error('PDFの保存中にエラーが発生しました:', err)
       setError(`PDFの保存中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setIsLoading(false)
